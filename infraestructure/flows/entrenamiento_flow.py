@@ -24,10 +24,25 @@ from mlflow.tracking import MlflowClient
 from prefect import flow, task
 from sklearn.model_selection import train_test_split
 
-from domain.modelo import OBJETIVO, calcular_metricas, construir_modelo, resolver_features
+from domain.modelo import (
+    OBJETIVO,
+    ajustar_modelo,
+    calcular_metricas,
+    construir_modelo,
+    resolver_features,
+)
 from scripts.load_data import cargar_datos as leer_datos
 
 CONFIG = "configs/config.yaml"
+
+# Tipos internos que skops marca como no confiables por defecto en modelos basados en árboles y LightGBM.
+SKOPS_TRUSTED_TYPES = [
+    "sklearn.tree._tree.Tree",
+    "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor",
+    "collections.OrderedDict",
+    "lightgbm.basic.Booster",
+    "lightgbm.sklearn.LGBMClassifier",
+]
 
 
 @task
@@ -65,15 +80,29 @@ def entrenar_y_registrar(df, cfg, features):
     print(f"Conjunto de prueba (Periodos recientes): {len(X_test)} filas")
     print(f"Proporción de {OBJETIVO} en Test: {y_test.mean():.2%}")
 
-    # 2. Crear y entrenar el modelo (preprocesado + estimador).
-    print(f"Creando modelo {cfg['modelo']['tipo']} con parámetros {cfg['modelo'].get('parametros')}")
+    # 2. Crear y entrenar el modelo (preprocesado + estimador), con GridSearchCV si hay param_grid.
     tipo = cfg["modelo"]["tipo"]
     parametros = cfg["modelo"].get("parametros") or {}
-    modelo = construir_modelo(tipo, parametros, numericas, categoricas)
-    
+    param_grid = cfg["modelo"].get("param_grid")
+    gs_cfg = cfg.get("grid_search") or {}
+    print(f"Creando modelo {tipo} con parámetros {parametros} y param_grid {param_grid}")
+    modelo_base = construir_modelo(tipo, parametros, numericas, categoricas)
+
     print("Entrenando modelo...")
-    modelo.fit(X_train, y_train)
-    print("Modelo entrenado")
+    modelo, mejores_params_grid, best_cv_score = ajustar_modelo(
+        modelo_base,
+        X_train,
+        y_train,
+        param_grid=param_grid,
+        cv=gs_cfg.get("cv", 3),
+        scoring=gs_cfg.get("scoring", "roc_auc"),
+        random_state=cfg["division"].get("random_state", 42),
+        n_jobs=gs_cfg.get("n_jobs", -1),
+    )
+    if mejores_params_grid:
+        print(f"Mejores parámetros GridSearch: {mejores_params_grid} | CV {gs_cfg.get('scoring', 'roc_auc')}: {best_cv_score:.4f}")
+    else:
+        print("Modelo entrenado")
     
     # 3. Calcular las métricas sobre el conjunto de prueba (Out-of-time).
     umbral = cfg["metricas"]["umbral"]
@@ -86,28 +115,36 @@ def entrenar_y_registrar(df, cfg, features):
     mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", cfg["mlflow"]["tracking_uri"]))
     mlflow.set_experiment(cfg["mlflow"]["experimento"])
     
+    params_finales = {**parametros, **mejores_params_grid}
+    params_log = {
+        "modelo": tipo,
+        **params_finales,
+        "grid_search": bool(param_grid),
+        "split_type": "chronological",
+        "test_size_ratio": test_size_ratio,
+        "umbral": umbral,
+        "features": features["nombre"],
+        "n_features": len(variables),
+    }
+    if param_grid:
+        params_log["grid_cv"] = gs_cfg.get("cv", 3)
+        params_log["grid_scoring"] = gs_cfg.get("scoring", "roc_auc")
+
+    metricas_log = {**metricas}
+    if best_cv_score is not None:
+        metricas_log["cv_best_score"] = best_cv_score
+
     with mlflow.start_run(run_name=cfg["mlflow"]["nombre_run"]) as run:
         mlflow.set_tag("fase", "entrenamiento")
-        mlflow.log_params(
-            {
-                "modelo": tipo,
-                **parametros,
-                "split_type": "chronological",
-                "test_size_ratio": test_size_ratio,
-                "umbral": umbral,
-                "features": features["nombre"],
-                "n_features": len(variables),
-            }
-        )
-        mlflow.log_metrics(metricas)
+        mlflow.log_params(params_log)
+        mlflow.log_metrics(metricas_log)
         info = mlflow.sklearn.log_model(
             modelo,
             name="model",
             signature=infer_signature(X_test, proba),
             input_example=X_test.head(3),
-            # Gradient boosting guarda árboles de sklearn; skops los marca como no confiables por defecto.
-            # Son nuestros propios modelos entrenados aquí, así que se confía solo en ese tipo.
-            skops_trusted_types=["sklearn.tree._tree.Tree"],
+            # Algunos modelos guardan árboles o estructuras internas que skops marca como no confiables por defecto.
+            skops_trusted_types=SKOPS_TRUSTED_TYPES,
         )
         run_id = run.info.run_id
         print(f"Run registrado en MLflow: {run_id} | URI del modelo: {info.model_uri}")
@@ -162,12 +199,19 @@ def entrenamiento_flow():
 
     # Entrena cada candidato con cada conjunto de features. Cada combinación es un run propio.
     resultados = []
+    gs_cfg = cfg.get("grid_search") or {}
     print(f"Entrenando candidatos: {[c['nombre_run'] for c in cfg['candidatos']]} con features {[f['nombre'] for f in cfg['features']]}")
     for candidato in cfg["candidatos"]:
+        param_grid = candidato.get("param_grid") if gs_cfg.get("activo", True) else None
         for features in cfg["features"]:
             cfg_run = {
                 **cfg,
-                "modelo": {"tipo": candidato["tipo"], "parametros": candidato["parametros"]},
+                "modelo": {
+                    "tipo": candidato["tipo"],
+                    "parametros": candidato.get("parametros") or {},
+                    "param_grid": param_grid,
+                },
+                "grid_search": gs_cfg,
                 "mlflow": {**cfg["mlflow"], "nombre_run": f"{candidato['nombre_run']}-{features['nombre']}"},
             }
             run_id, model_uri, metricas = entrenar_y_registrar(df, cfg_run, features)

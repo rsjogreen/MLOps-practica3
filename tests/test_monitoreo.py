@@ -6,6 +6,7 @@ import pytest
 from domain.modelo import NUMERICAS, OBJETIVO
 from domain.monitoreo import (
     SUBIDA_TASA_MAXIMA,
+    asegurar_lote,
     aplicar_drift,
     drift_de_target,
     fraccion_desde_evidently,
@@ -60,3 +61,22 @@ def test_drift_de_target_no_alerta_con_la_misma_tasa():
     referencia = pd.Series([0] * 800 + [1] * 200)
     lote = pd.Series([0] * 80 + [1] * 20)
     assert drift_de_target(referencia, lote, alfa=0.05)["drift"] is False
+
+
+def test_asegurar_lote_crea_lote_con_drift_si_no_existe(datos, tmp_path, monkeypatch):
+    import domain.monitoreo as monitoreo
+
+    monkeypatch.setattr(monitoreo, "cargar_datos", lambda ruta: datos)
+    ruta_lote = tmp_path / "lotes" / "lote_actual.csv"
+    cfg = {
+        "monitoreo": {"lote_actual": str(ruta_lote)},
+        "datos": {"ruta_test": "test.csv"},
+        "inferencia": {"tamano_lote": 50, "nivel_drift": 0.6},
+        "division": {"random_state": 42},
+    }
+
+    assert asegurar_lote(cfg) == str(ruta_lote)
+    lote = pd.read_csv(ruta_lote)
+    assert len(lote) == 50
+    assert OBJETIVO in lote.columns
+    assert asegurar_lote(cfg) == str(ruta_lote)

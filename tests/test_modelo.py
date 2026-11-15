@@ -3,7 +3,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from domain.modelo import NUMERICAS, CATEGORICAS, calcular_metricas, construir_modelo, resolver_features
+from domain.modelo import (
+    CATEGORICAS,
+    NUMERICAS,
+    ajustar_modelo,
+    calcular_metricas,
+    construir_modelo,
+    resolver_features,
+)
 
 
 def test_resolver_features_all():
@@ -26,6 +33,10 @@ def test_resolver_features_rechaza_variables_desconocidas():
 @pytest.mark.parametrize("tipo, parametros", [
     ("logistic_regression", {"C": 1.0, "max_iter": 1000}),
     ("gradient_boosting", {"n_estimators": 10, "max_depth": 2, "random_state": 42}),
+    ("random_forest", {"n_estimators": 10, "max_depth": 3, "random_state": 42}),
+    ("extra_trees", {"n_estimators": 10, "max_depth": 3, "random_state": 42}),
+    ("hist_gradient_boosting", {"max_iter": 10, "max_depth": 3, "random_state": 42}),
+    ("lightgbm", {"n_estimators": 10, "random_state": 42, "verbose": -1}),
 ])
 def test_modelo_predice_probabilidades_validas(tipo, parametros):
     rng = np.random.default_rng(0)
@@ -50,3 +61,56 @@ def test_calcular_metricas_perfecto():
     metricas = calcular_metricas(y, proba, umbral=0.5)
     assert metricas["auc"] == 1.0
     assert metricas["accuracy"] == 1.0
+
+
+def test_ajustar_modelo_con_grid_search():
+    rng = np.random.default_rng(42)
+    X = pd.DataFrame({
+        "Edad": rng.integers(18, 65, 60),
+        "Salario_Mes": rng.random(60) * 5000000,
+        "tip_cont": rng.choice(["I", "F", "O"], 60),
+    })
+    y = (X["Edad"] > 45).astype(int)
+
+    modelo_base = construir_modelo(
+        "random_forest",
+        {"random_state": 42},
+        ["Edad", "Salario_Mes"],
+        ["tip_cont"],
+    )
+    modelo, mejores_params, cv_score = ajustar_modelo(
+        modelo_base,
+        X,
+        y,
+        param_grid={"n_estimators": [5, 10], "max_depth": [2, 4]},
+        cv=2,
+        scoring="roc_auc",
+        n_jobs=1,
+    )
+
+    assert set(mejores_params.keys()) == {"n_estimators", "max_depth"}
+    assert mejores_params["n_estimators"] in {5, 10}
+    assert 0.0 <= cv_score <= 1.0
+    assert modelo.predict_proba(X).shape == (60, 2)
+
+
+def test_ajustar_modelo_sin_grid_search():
+    rng = np.random.default_rng(7)
+    X = pd.DataFrame({
+        "Edad": rng.integers(18, 65, 40),
+        "Salario_Mes": rng.random(40) * 5000000,
+        "tip_cont": rng.choice(["I", "F", "O"], 40),
+    })
+    y = (X["Edad"] > 45).astype(int)
+
+    modelo_base = construir_modelo(
+        "logistic_regression",
+        {"C": 1.0, "max_iter": 1000},
+        ["Edad", "Salario_Mes"],
+        ["tip_cont"],
+    )
+    modelo, mejores_params, cv_score = ajustar_modelo(modelo_base, X, y, param_grid=None)
+
+    assert mejores_params == {}
+    assert cv_score is None
+    assert modelo.predict_proba(X).shape == (40, 2)

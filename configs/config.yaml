@@ -25,26 +25,62 @@ features:
       - Meses_Con_Jefe
       - Ausentismo_Trimestre
 
+# Configuración del Grid Search ligero aplicado a cada candidato con `param_grid`.
+grid_search:
+  activo: true
+  cv: 3
+  scoring: roc_auc
+  n_jobs: -1
+
 # Modelos que el flow de entrenamiento compara. Cada uno se entrena con cada conjunto de `features`.
 # Cada run se llama `<nombre_run>-<nombre de features>`. Solo el de mayor AUC se evalúa para champion.
 candidatos:
-  - nombre_run: churn-logreg-c1
+  - nombre_run: churn-logreg
     tipo: logistic_regression
     parametros:
-      C: 1.0
       max_iter: 1000
-  - nombre_run: churn-logreg-c01
-    tipo: logistic_regression
-    parametros:
-      C: 0.1
-      max_iter: 1000
+      random_state: 42
+    param_grid:
+      C: [0.1, 1.0, 10.0, 100.0]
   - nombre_run: churn-gbt
     tipo: gradient_boosting
     parametros:
-      n_estimators: 200
-      learning_rate: 0.05
       max_depth: 3
       random_state: 42
+    param_grid:
+      n_estimators: [100, 200, 300, 400]
+      learning_rate: [0.05, 0.1, 0.2, 0.5, 2]
+  - nombre_run: churn-rf
+    tipo: random_forest
+    parametros:
+      random_state: 42
+    param_grid:
+      n_estimators: [100, 250, 500]
+      max_depth: [8, 15]
+  - nombre_run: churn-et
+    tipo: extra_trees
+    parametros:
+      random_state: 42
+    param_grid:
+      n_estimators: [100, 150, 200]
+      max_depth: [8, 15, 50]
+  - nombre_run: churn-hgb
+    tipo: hist_gradient_boosting
+    parametros:
+      max_iter: 100
+      random_state: 42
+    param_grid:
+      learning_rate: [0.05, 0.1]
+      max_depth: [3, 6]
+  - nombre_run: churn-lgbm
+    tipo: lightgbm
+    parametros:
+      random_state: 42
+      verbose: -1
+      n_jobs: 1
+    param_grid:
+      n_estimators: [100, 150]
+      learning_rate: [0.05, 0.1]
 
 mlflow:
   tracking_uri: http://localhost:5000  # servidor de MLflow de services/. Sin servidor: sqlite:///mlflow.db. MLFLOW_TRACKING_URI, si existe, tiene prioridad
@@ -62,4 +98,12 @@ registro:
 
 inferencia:
   tamano_lote: 100              # clientes que se puntúan en cada ejecución diaria
-  carpeta_salida: ../data       # relativa a actividades/actividad-2/ (la carpeta del dataset)
+  carpeta_salida: data          # relativa a la raíz
+  nivel_drift: 0.6              # emulación de drift: fracción de variables numéricas desplazadas en el lote (0.0 = sin drift)
+
+# Monitoreo de drift (actividad 3).
+monitoreo:
+  lote_actual: lotes/lote_actual.csv  # lote que puntúa la inferencia; lo leen los flows de drift
+  umbral_drift: 0.3                   # fracción de variables con drift a partir de la cual se emite una alerta
+  alfa_evento: 0.05                   # p-valor por debajo del cual el drift del target se considera drift
+  carpeta_reportes: reports           # relativa a la raíz

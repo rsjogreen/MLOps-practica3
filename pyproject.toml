@@ -3,7 +3,7 @@ requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [project]
-name = "mlops-churn"
+name = "mlops-churn-rh"
 version = "2.1.0"
 description = "Proyecto MLOps de predicción de churn: pipelines de entrenamiento e inferencia con Prefect y MLflow, y API con FastAPI (actividad 2)"
 requires-python = ">=3.12,<3.15"  # Prefect 3.8.8 no admite Python 3.15 o superior
@@ -19,6 +19,7 @@ dependencies = [
     "evidently==0.7.23",
     "fastapi==0.143.0",
     "uvicorn==0.54.0",
+    "lightgbm (>=4.7.0,<5.0.0)",
 ]
 
 [tool.poetry]

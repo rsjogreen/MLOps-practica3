@@ -24,6 +24,7 @@ import yaml
 from mlflow.tracking import MlflowClient
 from prefect import flow, task
 
+from domain.monitoreo import aplicar_drift
 from scripts.load_data import cargar_datos as leer_datos
 
 CONFIG = "configs/config.yaml"
@@ -42,10 +43,17 @@ def cargar_champion(cfg):
 
 @task
 def ingesta(cfg):
-    """Toma un lote de clientes. Aquí se simula con una muestra aleatoria del CSV."""
+    """Toma un lote de clientes, le aplica el drift emulado y guarda una copia para el monitoreo."""
     print(f"Ingestando lote de {cfg['inferencia']['tamano_lote']} clientes...")
     df = leer_datos(cfg["datos"]["ruta_test"])
-    return df.sample(n=cfg["inferencia"]["tamano_lote"])
+    base = df.sample(n=cfg["inferencia"]["tamano_lote"], random_state=cfg["division"]["random_state"])
+    lote = aplicar_drift(base, cfg["inferencia"]["nivel_drift"], cfg["division"]["random_state"])
+
+    ruta_lote = Path(cfg["monitoreo"]["lote_actual"])
+    ruta_lote.parent.mkdir(parents=True, exist_ok=True)
+    lote.to_csv(ruta_lote, index=False)
+    print(f"Lote con drift {cfg['inferencia']['nivel_drift']} guardado en {ruta_lote} ({len(lote)} filas)")
+    return lote
 
 
 @task
@@ -69,13 +77,14 @@ def predecir(modelo, lote, cfg):
 
 
 @task
-def registrar_inferencia(version, run_id_entrenamiento, ruta, filas, proba_media):
-    """Crea un run de inferencia con tags que apuntan a la versión del modelo y a su run de entrenamiento."""
+def registrar_inferencia(version, run_id_entrenamiento, nivel_drift, ruta, filas, proba_media):
+    """Crea un run de inferencia con tags que apuntan a la versión del modelo, a su run de entrenamiento y al drift."""
     print(f"Registrando inferencia para modelo versión {version}...")
     with mlflow.start_run(run_name=f"inferencia-{date.today().isoformat()}"):
         mlflow.set_tag("fase", "inferencia")
         mlflow.set_tag("modelo_version", version)
         mlflow.set_tag("modelo_run_id", run_id_entrenamiento)
+        mlflow.set_tag("nivel_drift", nivel_drift)
         mlflow.log_metric("filas_predichas", filas)
         mlflow.log_metric("probabilidad_media", proba_media)
         mlflow.log_artifact(ruta)
@@ -90,7 +99,7 @@ def inferencia_flow():
     modelo, version, run_id_entrenamiento = cargar_champion(cfg)
     lote = ingesta(cfg)
     ruta, filas, proba_media = predecir(modelo, lote, cfg)
-    registrar_inferencia(version, run_id_entrenamiento, ruta, filas, proba_media)
+    registrar_inferencia(version, run_id_entrenamiento, cfg["inferencia"]["nivel_drift"], ruta, filas, proba_media)
 
 
 if __name__ == "__main__":

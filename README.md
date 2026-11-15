@@ -96,11 +96,11 @@ Cada candidato se entrena con cada conjunto, y cada run registra el nombre del c
 
 ### Cambiar los modelos o sus hiperparámetros
 
-Edita la lista `candidatos` en `configs/config.yaml`. Cada candidato tiene `nombre_run`, `tipo` (`logistic_regression` o `gradient_boosting`) y `parametros`. El umbral mínimo para ser champion está en `registro.umbral_auc`, y el umbral de clasificación (probabilidad a partir de la que se predice churn) en `metricas.umbral`.
+Edita la lista `candidatos` y la sección `grid_search` en `configs/config.yaml`. Cada candidato tiene `nombre_run`, `tipo` (`logistic_regression`, `gradient_boosting`, `random_forest`, `extra_trees`, `hist_gradient_boosting` o `lightgbm`), `parametros` base y opcionalmente `param_grid` para ejecutar un Grid Search ligero con validación cruzada (`cv`, `scoring`, `n_jobs`). El umbral mínimo para ser champion está en `registro.umbral_auc`, y el umbral de clasificación (probabilidad a partir de la que se predice churn) en `metricas.umbral`.
 
 ### Cuántos runs se crean
 
-Cada ejecución crea `len(candidatos) × len(features)` runs. Con los 3 candidatos y 2 conjuntos de features de la configuración actual, son 6.
+Cada ejecución crea `len(candidatos) × len(features)` runs. Con los 6 candidatos y 2 conjuntos de features de la configuración actual, son 12.
 
 ## 2. Inferencia
 

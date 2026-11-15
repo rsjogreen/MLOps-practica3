@@ -1,9 +1,11 @@
+from pathlib import Path
 import numpy as np
 from scipy.stats import chi2_contingency
 from sklearn.model_selection import train_test_split
 import pandas as pd
 
 from domain.modelo import NUMERICAS, OBJETIVO
+from scripts.load_data import cargar_datos
 
 
 def dividir(df, division):
@@ -102,3 +104,20 @@ def drift_de_target(referencia, lote, alfa):
         "p_valor": float(p_valor),
         "drift": bool(p_valor < alfa),
     }
+
+
+def asegurar_lote(cfg):
+    """Obtiene la ruta del lote actual. Si no existe, genera uno con drift desde datos de prueba."""
+    ruta_lote = Path(cfg["monitoreo"]["lote_actual"])
+    if not ruta_lote.exists():
+        ruta_lote.parent.mkdir(parents=True, exist_ok=True)
+        df_test = cargar_datos(cfg["datos"]["ruta_test"])
+        n = cfg["inferencia"]["tamano_lote"]
+        semilla = cfg["division"]["random_state"]
+        nivel = cfg["inferencia"]["nivel_drift"]
+        if df_test.empty:
+            raise ValueError(f"No hay filas en el conjunto de prueba: {cfg['datos']['ruta_test']}")
+        base = df_test.sample(n=min(n, len(df_test)), random_state=semilla)
+        lote = aplicar_drift(base, nivel=nivel, semilla=semilla)
+        lote.to_csv(ruta_lote, index=False)
+    return str(ruta_lote)
