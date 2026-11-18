@@ -1,55 +1,77 @@
-# Actividad 2: pipelines de entrenamiento e inferencia, y API
+# MLOps-practica3: predicción de fuga de empleados
 
-Proyecto de la actividad 2: pipeline de entrenamiento y pipeline de inferencia en Prefect, conectados por el alias `champion` en MLflow, y una API de FastAPI que sirve el modelo.
+Repositorio del proyecto MLOps para predecir la fuga de empleados (`Target_Fuga`). Incluye preparación de datos, entrenamiento y registro de modelos, inferencia por lotes y API, orquestación con Prefect y monitoreo de drift.
 
-Los servicios (MLflow y Prefect) no están en esta carpeta: se levantan desde [`services/`](../../services/README.md).
+**Repositorio en GitHub:** [rsjogreen/MLOps-practica3](https://github.com/rsjogreen/MLOps-practica3)
 
-## Contribuidores
+**Clonar:** `git clone https://github.com/rsjogreen/MLOps-practica3.git`
 
-- Mario Alejandro Mendoza Suarez
-- Jose Esteban Arcos Muñoz
-- Robert Douglas Sjogreen Escorcia
+Los comandos de esta guía se ejecutan desde la raíz del repositorio. La carpeta `actividad-3/` contiene material de guía; el proyecto activo y su configuración están en la raíz.
 
-## Estructura
+## Componentes
 
-```
-MLOps-practica2/
-├── configs/
-│   ├── config.yaml            # datos, división, modelo, MLflow, registro e inferencia
+- **Datos y configuración:** el dataset original y sus particiones están en `data/`; `configs/config.yaml` define sus rutas, variables, candidatos, métricas y parámetros de inferencia y monitoreo.
+- **Modelo:** `domain/modelo.py` implementa el preprocesamiento, los clasificadores y las métricas. `scripts/load_data.py` valida y carga las columnas esperadas.
+- **Entrenamiento:** `infraestructure/flows/entrenamiento_flow.py` compara candidatos y conjuntos de variables, registra resultados en MLflow y promueve el modelo con mejor AUC al alias `champion` si cumple el umbral configurado.
+- **Inferencia:** `infraestructure/flows/inferencia_flow.py` carga el `champion`, genera predicciones y registra la ejecución en MLflow.
+- **Monitoreo:** `infraestructure/flows/drift_features_flow.py` genera un reporte de drift de variables con Evidently; `infraestructure/flows/drift_evento_flow.py` compara la distribución de `Target_Fuga`.
+- **API:** `infraestructure/api/main.py` expone predicciones individuales con FastAPI.
+- **Servicios:** `services/` contiene la configuración de MLflow y Prefect para Docker Compose y la guía para ejecutarlos sin Docker.
+- **Pruebas:** `tests/` cubre datos, modelo, monitoreo y API.
+
+```text
+.
+├── configs/config.yaml
+├── data/
 ├── domain/
-│   └── modelo.py              # lógica del modelo: variables, pipeline y métricas (sin Prefect ni MLflow)
-├── scripts/
-│   └── load_data.py           # carga del CSV con validación de columnas
 ├── infraestructure/
-│   ├── flows/
-│   │   ├── entrenamiento_flow.py   # pipeline de entrenamiento
-│   │   ├── inferencia_flow.py      # pipeline de inferencia (se ejecuta cada día)
-│   │   └── desplegar.py            # registra los despliegues en Prefect
-│   └── api/
-│       └── main.py            # API de FastAPI que sirve el modelo champion
-├── poetry.lock                # versiones exactas resueltas (no editar a mano)
-└── pyproject.toml             # dependencias declaradas con versión fijada
+│   ├── api/
+│   └── flows/
+├── scripts/
+├── services/
+└── tests/
 ```
-
-El CSV de entrada está en `actividades/data/Customer-Churn-Records.csv`, y las predicciones diarias se guardan en esa misma carpeta.
 
 ## Requisitos
 
-- Python entre 3.12 y 3.14.
+- Python `>=3.12,<3.15` (CI utiliza Python 3.12).
 - Poetry 2.x.
-- Los servicios de MLflow y Prefect levantados desde `services/`.
+- Docker Desktop para ejecutar MLflow y Prefect con Docker Compose, o Python 3.12 para instalarlos localmente.
 
-## Entorno
-
-Desde `actividades/actividad-2`:
+Instala las dependencias desde la raíz:
 
 ```powershell
-poetry install
+poetry install --no-interaction
 ```
 
-## Variables de entorno
+## Preparar los datos
 
-Define estas variables en cada terminal donde ejecutes un flow o la API:
+El dataset fuente es `data/pipelyne_DatasetFuga.csv`. El script divide los datos cronológicamente y genera `data/train_fuga.csv` y `data/test_fuga.csv`, usando los meses definidos en `scripts/split_data.py`:
+
+```powershell
+poetry run python scripts/split_data.py
+```
+
+Las rutas de datos se definen en `configs/config.yaml`. El objetivo de clasificación es `Target_Fuga`; la columna `Mes` se utiliza para la separación temporal y no como variable predictora.
+
+## Iniciar MLflow y Prefect
+
+Con Docker Desktop en ejecución, desde la raíz:
+
+```powershell
+docker compose -f services/docker-compose.yml up -d
+```
+
+- MLflow: [http://localhost:5000](http://localhost:5000)
+- Prefect: [http://localhost:4200](http://localhost:4200)
+
+Para detener los servicios:
+
+```powershell
+docker compose -f services/docker-compose.yml down
+```
+
+Las instrucciones para ejecutar los servicios sin Docker están en [`services/README.md`](services/README.md). Define estas variables en la terminal desde la que ejecutarás los flows o la API:
 
 ```powershell
 $env:PREFECT_API_URL = "http://localhost:4200/api"
@@ -57,131 +79,85 @@ $env:MLFLOW_TRACKING_URI = "http://localhost:5000"
 $env:PYTHONUTF8 = "1"
 ```
 
-`MLFLOW_TRACKING_URI` tiene prioridad sobre `mlflow.tracking_uri` de `configs/config.yaml`.
+## Flujo de trabajo
 
-`PYTHONUTF8` evita un error de codificación en Windows al cerrar un run de MLflow (ver solución de problemas). Es necesario en la terminal donde ejecutes `desplegar.py`.
+Ejecuta los flows desde la raíz y con los servicios disponibles.
 
-**Ejecuta todos los comandos desde la raíz de `actividad-2`.** Las rutas de la configuración (`configs/config.yaml`, `../data/...`) se resuelven desde la carpeta donde estás.
-
-## 1. Entrenamiento
-
-Entrena el modelo, lo registra en MLflow y, si supera el umbral mínimo y el AUC del champion actual, le asigna el alias `champion`:
+### 1. Entrenar y registrar modelos
 
 ```powershell
 poetry run python infraestructure/flows/entrenamiento_flow.py
 ```
 
-Al terminar, la consola muestra el resultado. Por ejemplo:
+El flow compara los modelos y variables definidos en `configs/config.yaml`, calcula AUC, accuracy, precision, recall y F1, y registra cada ejecución en MLflow. El mejor modelo se registra como `fuga-modelo-v2` con el alias `champion` si supera `registro.umbral_auc` y, cuando ya existe un champion, también supera su AUC.
 
-- `Versión 1 registrada como champion (AUC 0.9992)`: el modelo pasó a ser champion.
-- `AUC ... no supera al champion ...`: el run queda en MLflow, pero el alias no cambia.
-- `AUC ... por debajo del mínimo ...`: el modelo no se registra como champion.
+### 2. Ejecutar inferencia por lote
 
-El flow carga los datos una vez y entrena cada combinación de `candidatos` × `features`. Luego elige la combinación con mayor AUC y solo esa puede pasar a champion. Las tasks son `cargar_datos`, `entrenar_y_registrar` (una por combinación) y `promover_si_mejora`.
-
-**Dónde verlo:**
-
-- En MLflow (http://localhost:5000), experimento `churn-training-mlops`, un run por combinación con nombre `<nombre_run>-<features>` (por ejemplo `churn-gbt-custom`). Cada run tiene el tag `fase = entrenamiento`, los parámetros (`modelo`, sus hiperparámetros, `semilla`, `umbral`, `features` con el nombre del conjunto, `n_features`), las métricas (`auc`, `accuracy`, `precision`, `recall`, `f1`) y el modelo como artefacto.
-- En MLflow, en el Model Registry, el modelo `churn-modelo` tiene el alias `champion` y el tag `estado = aprobado` en su versión.
-- En Prefect (http://localhost:4200/runs), el flow `entrenamiento-churn`.
-
-### Cambiar las variables del experimento
-
-Edita la sección `features` de `configs/config.yaml`. Es una lista de conjuntos; cada uno tiene un `nombre` y sus `columnas`:
-
-- `columnas: ALL`: todas las variables.
-- `columnas: [...]`: solo las que listes. Los nombres deben coincidir con las columnas del CSV.
-
-Cada candidato se entrena con cada conjunto, y cada run registra el nombre del conjunto en el parámetro `features`.
-
-### Cambiar los modelos o sus hiperparámetros
-
-Edita la lista `candidatos` y la sección `grid_search` en `configs/config.yaml`. Cada candidato tiene `nombre_run`, `tipo` (`logistic_regression`, `gradient_boosting`, `random_forest`, `extra_trees`, `hist_gradient_boosting` o `lightgbm`), `parametros` base y opcionalmente `param_grid` para ejecutar un Grid Search ligero con validación cruzada (`cv`, `scoring`, `n_jobs`). El umbral mínimo para ser champion está en `registro.umbral_auc`, y el umbral de clasificación (probabilidad a partir de la que se predice churn) en `metricas.umbral`.
-
-### Cuántos runs se crean
-
-Cada ejecución crea `len(candidatos) × len(features)` runs. Con los 6 candidatos y 2 conjuntos de features de la configuración actual, son 12.
-
-## 2. Inferencia
-
-Carga el modelo `champion`, puntúa un lote de clientes, guarda las predicciones y registra un run en MLflow:
+Requiere que exista un modelo `champion`:
 
 ```powershell
 poetry run python infraestructure/flows/inferencia_flow.py
 ```
 
-Necesitas un champion registrado: ejecuta antes el entrenamiento.
+El flow toma un lote de `data/test_fuga.csv`, aplica el nivel de drift configurado y guarda la salida en `data/prediccion_<fecha>.csv`. El lote utilizado para el monitoreo se guarda en la ruta `monitoreo.lote_actual`. La inferencia registra sus métricas y la versión del modelo usada en MLflow.
 
-- **Lote:** `inferencia.tamano_lote` clientes tomados al azar del CSV. Como simulación de clientes nuevos, el lote cambia en cada ejecución.
-- **Predicciones:** se guardan en `actividades/data/prediccion_<fecha>.csv`. Cada fila tiene las columnas del cliente, la columna `Exited` del CSV original, `probabilidad_churn` y `prediccion` (1 si predice abandono). Estos archivos no se versionan en Git.
-- **Run en MLflow:** experimento `churn-training-mlops`, run `inferencia-<fecha>`. Tiene las tags `fase = inferencia`, `modelo_version` (versión del champion usada) y `modelo_run_id` (run de entrenamiento de esa versión); las métricas `filas_predichas` y `probabilidad_media`; y el CSV de predicciones como artefacto.
-- **Columnas del modelo:** la inferencia usa las mismas columnas con las que se entrenó el champion, aunque `features` en `config.yaml` haya cambiado después.
+### 3. Revisar drift
 
-## 3. Despliegues en Prefect
+Ejecuta los flows después de generar o seleccionar un lote:
 
-Registra dos despliegues y mantén la terminal abierta:
+```powershell
+poetry run python -m infraestructure.flows.drift_features_flow
+poetry run python -m infraestructure.flows.drift_evento_flow
+```
+
+El primero compara las variables del lote con los datos de entrenamiento, guarda un reporte HTML en `reports/` y alerta según `monitoreo.umbral_drift`. El segundo compara la distribución de `Target_Fuga` y alerta según `monitoreo.alfa_evento`; necesita que el lote tenga etiquetas.
+
+### 4. Registrar despliegues en Prefect
 
 ```powershell
 poetry run python infraestructure/flows/desplegar.py
 ```
 
-- `entrenamiento-churn/entrenamiento-churn`: sin horario. Se lanza a mano.
-- `inferencia-churn/inferencia-diaria`: se ejecuta todos los días a las 06:00 en hora UTC (cron `0 6 * * *`).
+Registra el despliegue de entrenamiento manual y el de inferencia diaria (06:00 UTC). Mantén abierta la terminal que ejecuta este comando para que Prefect pueda lanzar las ejecuciones.
 
-Mientras la terminal esté abierta, Prefect puede lanzar las ejecuciones. Si la cierras, las ejecuciones programadas no se lanzan.
+### 5. Iniciar la API
 
-Para lanzar un despliegue a mano, desde otra terminal con las variables definidas:
-
-```powershell
-poetry run prefect deployment run "entrenamiento-churn/entrenamiento-churn"
-poetry run prefect deployment run "inferencia-churn/inferencia-diaria"
-```
-
-También puedes lanzarlos desde la UI de Prefect, en http://localhost:4200/deployments.
-
-## 4. API de inferencia
-
-La API carga el champion al arrancar. Si el entrenamiento asigna un champion nuevo, reinicia la API.
+La API carga el alias `champion` al arrancar. Si se promueve una nueva versión, reinicia la API para que la cargue:
 
 ```powershell
 poetry run uvicorn infraestructure.api.main:app --port 8000
 ```
 
-- Documentación interactiva: http://localhost:8000/docs
-- Estado y versión del modelo: http://localhost:8000/health
-- Predicción para un cliente: `POST http://localhost:8000/predict`
+- Documentación interactiva: [http://localhost:8000/docs](http://localhost:8000/docs)
+- Estado y versión del modelo: [http://localhost:8000/health](http://localhost:8000/health)
+- Predicción: `POST http://localhost:8000/predict`
 
-Ejemplo de predicción desde PowerShell, en otra terminal:
+El endpoint `/predict` recibe los datos de un empleado según el esquema documentado en `/docs` y devuelve `probabilidad_fuga`, `prediccion_fuga` y `version_modelo`.
+
+## Configuración
+
+Edita `configs/config.yaml` para cambiar:
+
+- Rutas del dataset, entrenamiento y prueba.
+- Conjuntos de variables y candidatos de clasificación (regresión logística, gradient boosting, random forest, extra trees, hist gradient boosting y LightGBM).
+- Grid search, métricas, umbral de clasificación y umbral mínimo de AUC para promover un champion.
+- URI y nombre del experimento MLflow, y nombre registrado del modelo.
+- Tamaño y nivel de drift del lote de inferencia; ruta del lote y carpeta de reportes.
+
+El valor de `MLFLOW_TRACKING_URI`, cuando está definido, tiene prioridad sobre `mlflow.tracking_uri` en el YAML.
+
+## Pruebas y CI
+
+Ejecuta las pruebas desde la raíz:
 
 ```powershell
-$cliente = @{
-    CreditScore = 619; Geography = "France"; Gender = "Female"; Age = 42
-    Tenure = 2; Balance = 0.0; NumOfProducts = 1; HasCrCard = 1
-    IsActiveMember = 1; EstimatedSalary = 101348.88; Complain = 1
-    "Satisfaction Score" = 2; "Card Type" = "DIAMOND"; "Point Earned" = 464
-} | ConvertTo-Json
-
-Invoke-RestMethod -Uri http://localhost:8000/predict -Method Post -ContentType "application/json" -Body $cliente
+poetry run pytest
 ```
 
-La respuesta incluye `probabilidad_churn`, `prediccion` (1 si el cliente abandona, 0 si no) y `version_modelo`.
+Las pruebas no necesitan los servidores de MLflow ni Prefect; la API utiliza un modelo de prueba. El workflow de GitHub Actions en `.github/workflows/ci.yml` instala las dependencias y ejecuta `pytest` desde la raíz al abrir o actualizar un pull request y al hacer push a `main`.
 
-La API recibe todas las columnas del cliente aunque el modelo use solo algunas, según `features` de `config.yaml`; usa solo las que necesita el champion.
+## Contribuidores
 
-## Orden recomendado
-
-1. Levantar los servicios desde `services/`.
-2. Entrenar: `infraestructure/flows/entrenamiento_flow.py`.
-3. Inferir: `infraestructure/flows/inferencia_flow.py`.
-4. Desplegar en Prefect: `infraestructure/flows/desplegar.py`.
-5. Levantar la API: `infraestructure.api.main:app`.
-
-## Solución de problemas
-
-- **`Registered Model with name=churn-modelo not found`:** no hay champion todavía. Ejecuta el entrenamiento y revisa que el AUC supere `registro.umbral_auc`. Si todas las combinaciones de `features` tienen un AUC por debajo del umbral, ningún run se registra como champion. Revisa los conjuntos de features en `config.yaml`.
-- **`UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f3c3'`** al terminar un run desde Prefect: la consola usa `cp1252`. Define `$env:PYTHONUTF8 = "1"` en la terminal donde ejecutas `desplegar.py` y vuelve a lanzarlo. Si el run ha quedado en `RUNNING` en MLflow, márcalo como fallido desde la UI.
-- **`MlflowException: The saved sklearn model references untrusted types`** al registrar gradient boosting: ya está resuelto en `entrenamiento_flow.py` con `skops_trusted_types`. Si lo ves en otro sitio, añade el mismo parámetro.
-- **`ModuleNotFoundError: No module named 'scripts'`:** ejecuta `poetry install` de nuevo desde `actividad-2`, para que los paquetes `scripts`, `domain` e `infraestructure` queden instalados.
-- **La API no encuentra el modelo al arrancar:** entrena primero y revisa que `MLFLOW_TRACKING_URI` apunte al servidor correcto.
-- **`httpx.InvalidURL: Invalid non-printable ASCII character in URL, '\n'`:** la variable `PREFECT_API_URL` tiene un salto de línea al final, probablemente por haberla copiado con un salto. Comprueba su longitud con `$env:PREFECT_API_URL.Length`: debe ser `25`. Si no lo es, vuelve a definirla en una terminal nueva con `$env:PREFECT_API_URL = "http://localhost:4200/api"` y revisa que `$env:MLFLOW_TRACKING_URI.Length` sea `21`.
-- **La UI de Prefect no muestra despliegues:** ejecuta `desplegar.py` con `PREFECT_API_URL` definida y deja la terminal abierta.
+- Mario Alejandro Mendoza Suarez
+- Jose Esteban Arcos Muñoz
+- Robert Douglas Sjogreen Escorcia
