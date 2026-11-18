@@ -105,7 +105,6 @@ def drift_de_target(referencia, lote, alfa):
         "drift": bool(p_valor < alfa),
     }
 
-
 def asegurar_lote(cfg):
     """Obtiene la ruta del lote actual. Si no existe, genera uno con drift desde datos de prueba."""
     ruta_lote = Path(cfg["monitoreo"]["lote_actual"])

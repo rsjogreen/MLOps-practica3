@@ -97,13 +97,16 @@ registro:
                                   # Si no hay champion, cualquier modelo con AUC > umbral_auc se promueve a champion para iniciar la inferencia.
 
 inferencia:
-  tamano_lote: 100              # clientes que se puntúan en cada ejecución diaria
+  tamano_lote: 5000              # clientes que se puntúan en cada ejecución diaria
   carpeta_salida: data          # relativa a la raíz
-  nivel_drift: 0.6              # emulación de drift: fracción de variables numéricas desplazadas en el lote (0.0 = sin drift)
+  nivel_drift: 0.0              # emulación de drift: fracción de variables numéricas desplazadas en el lote (0.0 = sin drift)
 
 # Monitoreo de drift (actividad 3).
 monitoreo:
-  lote_actual: lotes/lote_actual.csv  # lote que puntúa la inferencia; lo leen los flows de drift
+#  lote_actual: lotes/lote_actual.csv  # lote que puntúa la inferencia; lo leen los flows de drift
   umbral_drift: 0.3                   # fracción de variables con drift a partir de la cual se emite una alerta
   alfa_evento: 0.05                   # p-valor por debajo del cual el drift del target se considera drift
   carpeta_reportes: reports           # relativa a la raíz
+#  lote_actual: lotes/prediccion_2026-11-18 drift 0.0.csv  # lote sin drift 0.0; lo leen los flows de drift
+#  lote_actual: lotes/prediccion_2026-11-18 drift 0.3.csv  # lote con drift 0.3; lo leen los flows de drift
+  lote_actual: lotes/prediccion_2026-11-18 drift 0.6.csv  # lote con drift 0.6; lo leen los flows de drift
